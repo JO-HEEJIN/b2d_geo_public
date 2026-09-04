@@ -1,0 +1,53 @@
+# secrets
+.env
+*.env
+*.pem
+*.key
+*.crt
+*_snapshot.dump
+
+# data files (public data downloads, not tracked)
+data/
+detection/labels/
+detection/images/
+detection/coco/
+detection/rdd/
+detection/deimv2/
+detection/.venv/
+detection/runs/
+detection/*.pt
+__pycache__/
+*.zip
+*.csv
+*.shp
+*.shx
+*.dbf
+*.prj
+
+# test fixtures are tracked even though bulk data files are not
+!**/testdata/*.csv
+
+# build artifacts (root binaries only; cmd/ source must stay tracked)
+bin/
+/b2d-server
+/b2d-etl
+
+# gitnexus local index (derived, 12MB+)
+.gitnexus/
+
+# caveman installer artifacts (skill lives in ~/.claude/skills)
+.aider-desk/
+skills-lock.json
+
+# OS
+.DS_Store
+
+# editor
+.idea/
+.vscode/
+.claude/
+.agents/
+.codex/
+
+# serena tool cache
+.serena/

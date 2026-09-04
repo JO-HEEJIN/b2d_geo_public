@@ -1,0 +1,9 @@
+# Preserve source-distributed fixture and vendor bytes exactly. These files use
+# upstream line endings/encodings that are part of parser and browser coverage.
+internal/etl/juso/testdata/** -text -whitespace
+internal/etl/sbiz/testdata/** -text -whitespace
+web/public/vendor/** -text -whitespace
+
+# Markdown renderers ignore a final blank line; do not treat it as a patch error.
+*.md whitespace=-blank-at-eof
+LICENSE whitespace=-blank-at-eof

@@ -1,0 +1,10 @@
+# Allowlist: 빌드에 필요한 Go 소스만 컨텍스트에 포함한다.
+# 루트에 detection(34G)/"040.교량..."(27G)/data(9.3G) 등 대형 로컬 데이터가 있어
+# blocklist는 누락 위험이 크다 — 전부 무시(*)한 뒤 필요한 것만 복원(!).
+*
+!go.mod
+!go.sum
+!cmd
+!internal
+!migrations
+!web

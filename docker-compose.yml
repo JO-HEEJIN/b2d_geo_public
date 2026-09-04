@@ -1,0 +1,21 @@
+services:
+  postgis:
+    image: postgis/postgis:16-3.4
+    container_name: b2d_postgis
+    environment:
+      POSTGRES_USER: b2d
+      POSTGRES_PASSWORD: ${B2D_DB_PASSWORD:-b2d_local_dev}
+      POSTGRES_DB: b2d_geo
+    ports:
+      # 5433: 호스트의 Homebrew PostgreSQL(5432)과 충돌 회피
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U b2d -d b2d_geo"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  pgdata:

@@ -1,0 +1,62 @@
+# b2d_geo — Korean land intelligence API (지오코딩·필지·공시지가·용도지역·실거래)
+
+Base URL: https://api.birth2death.com/v1
+Auth: Authorization: Bearer <API_KEY> (or X-API-Key header). /v1/health needs no auth.
+Demo key: self-issue at https://api.birth2death.com/docs.html (geo scope, low rate).
+Pricing / full access: https://api.birth2death.com/pricing.html
+OpenAPI spec: https://api.birth2death.com/docs.html
+All responses return facts from Korean public data only (no estimation or scoring).
+Coordinates are [lon, lat], WGS84.
+
+## Endpoints
+
+- GET /v1/geocode?q=<address>            Korean address (road or jibun) -> coordinates, bcode. scope: geo
+- POST /v1/geocode/batch                 JSON array of addresses -> bulk geocoding. scope: geo
+- GET /v1/reverse?lon=&lat=              coordinates -> nearest road address. scope: geo
+- GET /v1/places/search?q=&lon=&lat=&radius=&category=&limit=   place/store search, choseong (initial consonant) supported. scope: geo
+- GET /v1/parcel/by-point?lon=&lat=      point -> land parcel (PNU, category, area). scope: geo
+- GET /v1/parcel/by-jibun?bcode=&jibun=  legal-dong code + jibun -> parcel. scope: geo
+- GET /v1/parcel/{pnu}                   19-digit PNU -> parcel. scope: geo
+- GET /v1/appraisal/official-price?pnu=  official land value (standard first, individual fallback). scope: realestate
+- GET /v1/appraisal/land-features?pnu=   land features (use, terrain, road side). scope: realestate
+- GET /v1/appraisal/land-use?pnu=        zoning: use zones/districts with relation (include/conflict/adjacent). scope: realestate
+- GET /v1/appraisal/standard-lots?pnu=&lng=&lat=&radius=   standard lots by distance; use PNU or lng+lat. scope: realestate
+- GET /v1/appraisal/sales?lawd_cd=&deal_ymd=          real land transactions (MOLIT), district + YYYYMM. scope: realestate
+- GET /v1/appraisal/price-index?sigungu=&use_zone_class=&from=&to=   monthly land price index. scope: realestate
+- GET /v1/usage                          your key's usage, tier, monthly cap and remaining calls.
+- GET /v1/health                         health check, no auth.
+
+## Data coverage
+
+Nationwide: addresses/buildings, 39.7M cadastral parcels, zoning (222M rows),
+standard lot prices, transactions, price index, 2.7M places.
+Seoul + Gyeonggi first: individual official prices, land features. Other regions
+return error code REGION_NOT_LOADED (facts are never guessed); regions are loaded
+on contract.
+
+## Errors
+
+JSON body: {"error": {"code": "...", "message": "..."}}
+- 401 unauthorized: missing/invalid key
+- 403 forbidden: key lacks required scope (geo | realestate)
+- 422 REGION_NOT_LOADED: individual price / land features not loaded for that region yet
+- 429 rate_limited: per-second limit, Retry-After header set
+- 429 monthly_cap_exceeded: monthly quota (UTC month) used up; resets next month; upgrade at /pricing.html
+
+## MCP server (for AI agents: Claude Desktop, Cursor, ...)
+
+Remote endpoint (no install): POST https://api.birth2death.com/mcp
+  streamable HTTP, stateless; send your API key as Authorization: Bearer <key>.
+  Config example: {"mcpServers": {"b2d-geo": {"url": "https://api.birth2death.com/mcp",
+  "headers": {"Authorization": "Bearer <your key>"}}}}
+Claude Code CLI (one line):
+  claude mcp add --transport http b2d-geo https://api.birth2death.com/mcp --header "Authorization: Bearer <your key>"
+URL-only clients (key embedded in the URL; keep it secret):
+  https://api.birth2death.com/mcp/<your key>
+Local (stdio): go install github.com/JO-HEEJIN/b2d_geo_public/cmd/b2d-mcp@latest
+  (source: https://github.com/JO-HEEJIN/b2d_geo_public)
+  Config: {"mcpServers": {"b2d-geo": {"command": "b2d-mcp", "env": {"B2D_API_KEY": "<your key>"}}}}
+Protocol: MCP revision 2025-06-18 (negotiates 2024-11-05, 2025-03-26).
+Tools: geocode, reverse_geocode, search_places, get_parcel, get_land_value,
+get_transactions, get_zoning. Tool errors are human-readable sentences meant to be
+relayed to the user as-is.

@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>배치 지오코딩 · b2d_geo</title>
+  <meta name="description" content="주소 여러 건을 붙여넣으면 좌표·법정동코드로 한 번에. CSV로 내려받기.">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/"><span class="glyph">B</span> b2d_geo</a>
+    <nav>
+      <a href="/map.html">지도 데모</a>
+      <a href="/batch.html" class="active">배치</a>
+      <a href="/docs.html">API 문서</a>
+      <button class="btn ghost" style="padding:7px 11px" onclick="toggleTheme()" aria-label="테마 전환">◐</button>
+    </nav>
+  </header>
+
+  <div class="batch-wrap">
+    <h1>배치 지오코딩</h1>
+    <p class="sub">도로명주소를 한 줄에 하나씩 붙여넣으세요. 좌표·법정동코드로 한 번에 변환하고 CSV로 내려받습니다. 내부적으로 <code>POST /v1/geocode/batch</code>를 호출합니다.</p>
+
+    <div class="batch-input">
+      <textarea id="input" placeholder="서울특별시 중구 세종대로 110&#10;경기도 하남시 대청로 10&#10;경기도 성남시 분당구 판교역로 235"></textarea>
+    </div>
+    <div class="batch-bar">
+      <button class="btn" id="run">변환</button>
+      <button class="btn ghost" id="sample">예시 채우기</button>
+      <button class="btn ghost" id="csv" disabled>CSV 다운로드</button>
+      <span class="count" id="count"></span>
+    </div>
+
+    <div id="out"><div class="batch-empty">주소를 입력하고 <b>변환</b>을 누르세요.</div></div>
+  </div>
+
+  <footer class="landing-foot">
+    <div>
+      <a href="https://api.birth2death.com/batch.html" rel="noopener">라이브 배치 데모</a>·
+      <a href="https://api.birth2death.com/docs.html" rel="noopener">라이브 API 문서</a>
+    </div>
+    <p style="margin-top:6px">면접 검토용 공개 코드 스냅샷</p>
+  </footer>
+
+  <script src="/shared.js"></script>
+  <script src="/batch.js"></script>
+</body>
+</html>

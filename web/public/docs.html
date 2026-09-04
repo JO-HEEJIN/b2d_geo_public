@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>API 문서 · b2d_geo</title>
+  <meta name="description" content="b2d_geo 위치·토지 인텔리전스 API 레퍼런스. 지오코딩·필지·감정평가 15개 엔드포인트, 브라우저에서 바로 실행.">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/"><span class="glyph">B</span> b2d_geo</a>
+    <nav>
+      <a href="/map.html">지도 데모</a>
+      <a href="/batch.html">배치</a>
+      <a href="/docs.html" class="active">API 문서</a>
+      <a href="https://api.birth2death.com/docs.html" rel="noopener">라이브 API 문서</a>
+      <button class="btn ghost" style="padding:7px 11px" onclick="toggleTheme()" aria-label="테마 전환">◐</button>
+    </nav>
+  </header>
+
+  <div class="docs-layout">
+    <aside class="docs-side" id="side"></aside>
+    <main class="docs-main">
+      <div class="docs-intro">
+        <h1>API 레퍼런스</h1>
+        <p>대한민국 주소를 좌표로, 좌표를 필지로, 필지를 공시지가·용도지역·실거래·감정평가급 데이터로 잇는 위치·토지 인텔리전스 API입니다.</p>
+        <p>모든 응답은 <b>DB에 적재된 공공데이터 사실</b>만 반환합니다(보정·추정·추천 없음). 좌표는 <code>[경도, 위도]</code> 순서입니다.</p>
+      </div>
+
+      <div class="auth-banner">
+        <span style="font-size:18px">🔑</span>
+        <div>
+          <b>인증</b> — 모든 <code>/v1</code> 요청은 <code>Authorization: Bearer &lt;API_KEY&gt;</code> 헤더가 필요합니다(<code>/v1/health</code> 제외).
+          이 문서의 <b>실행</b> 버튼은 rate-limit이 걸린 <b>데모 키</b>를 자동으로 사용합니다. 프로덕션 키 발급은 아래 요금제를 참고하세요.
+        </div>
+      </div>
+
+      <div id="issueBox" class="issue-box" hidden>
+        <div class="issue-head">
+          <b>내 데모 키 발급</b>
+          <span class="muted">geo scope(지오코딩·필지) · rate 2 req/s · 코드에서 바로 사용</span>
+        </div>
+        <div class="issue-row">
+          <button class="btn" id="issueBtn">데모 키 발급받기</button>
+          <div id="issueOut"></div>
+        </div>
+      </div>
+
+      <div id="endpoints"></div>
+    </main>
+  </div>
+
+  <footer class="docs-foot" id="pricing"></footer>
+
+  <footer class="landing-foot">
+    <div>
+      <a href="https://api.birth2death.com/" rel="noopener">라이브 서비스</a>·
+      <a href="https://api.birth2death.com/docs.html" rel="noopener">라이브 API 문서</a>
+    </div>
+    <p style="margin-top:6px">면접 검토용 공개 코드 스냅샷</p>
+  </footer>
+
+  <script src="/shared.js"></script>
+  <script src="/docs.js"></script>
+</body>
+</html>

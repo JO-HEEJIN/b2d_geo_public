@@ -1,0 +1,713 @@
+openapi: 3.1.0
+info:
+  title: b2d-geo API
+  version: "1.0.0"
+  description: |
+    공공데이터 기반 위치 서비스 API (geocoding / reverse geocoding / places /
+    부동산 필지 / 감정평가 사실조회).
+
+    ## 인증
+    `/v1/health`를 제외한 모든 엔드포인트는 API 키가 필요하다.
+    키는 `X-API-Key: <key>` 헤더로 보내며, 하위호환으로 `Authorization: Bearer <key>`도
+    받는다. 서버는 키의 SHA-256 해시만 저장한다(평문 미저장).
+
+    ## Scope
+    키는 scope를 가진다. `/v1/appraisal/*`는 `realestate` scope가, 그 외 모든
+    엔드포인트는 `geo` scope가 필요하다. scope 미충족 시 403.
+
+    ## Rate limit
+    키별·IP별 이중 토큰 버킷. 키별 처리율은 키의 rate_limit_rps(버스트 2배),
+    IP별은 20 req/s(버스트 40). 초과 시 429와 `Retry-After` 헤더(초).
+
+    ## 에러 포맷
+    미들웨어(401/403/429)는 `{"error":{"code","message"}}`를 반환한다.
+    핸들러 계층 오류(400/404/500/502/503)는 현재 `{"error":"<message>"}` 형태다.
+
+    ## 요청 추적
+    모든 `/v1/*` 응답에 `X-Request-Id` 헤더가 붙는다. 에러 문의 시 이 ID를
+    첨부하면 서버 로그(`req <id>: ...`)와 바로 대조할 수 있다.
+servers:
+  - url: http://localhost:8080
+    description: 로컬 개발 서버
+
+security:
+  - ApiKeyAuth: []
+  - BearerAuth: []
+
+paths:
+  /v1/health:
+    get:
+      summary: 상태 확인 (인증 불필요)
+      operationId: health
+      security: []
+      responses:
+        "200":
+          description: 정상
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: ok }
+        "503":
+          description: DB 연결 불가
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/HandlerError" }
+              example: { error: "db unreachable" }
+
+  /v1/usage:
+    get:
+      summary: 자기 API 키의 사용량 집계 (scope 무관, 인증만 필요)
+      operationId: usage
+      responses:
+        "200":
+          description: 엔드포인트별 호출 수 집계 (호출자 키 한정, usage_log 배치 반영분)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  total: { type: integer, format: int64 }
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        endpoint: { type: string }
+                        count: { type: integer, format: int64 }
+                        first_seen: { type: string, format: date-time }
+                        last_seen: { type: string, format: date-time }
+                  tier:
+                    type: string
+                    description: 키의 요금 티어 (demo | standard)
+                  monthly_cap:
+                    type: integer
+                    format: int64
+                    description: 월 호출 하드캡. 0이면 캡 없음(rate limit만 적용)
+                  month_used:
+                    type: integer
+                    format: int64
+                    description: 이달(UTC) 총 호출 수
+                  month_remaining:
+                    type: integer
+                    format: int64
+                    description: 이달 잔여 호출 수 (monthly_cap > 0일 때만 존재)
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /v1/geocode:
+    get:
+      summary: 주소 → 좌표 (geo scope)
+      operationId: geocode
+      parameters:
+        - name: q
+          in: query
+          required: true
+          description: 도로명 또는 지번 주소 (최소 5자)
+          schema: { type: string, minLength: 5 }
+      responses:
+        "200":
+          description: |
+            매칭 결과. 복수 시도 후보에 걸리면 match=ambiguous + candidates로 200 반환.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GeocodeResult" }
+              example:
+                road_address: "경기도 하남시 대청로 10"
+                bcode: "4145010100"
+                point: [127.2065, 37.5392]
+                match: "exact"
+                score: 0.71  # trigram 폴백 경로에서만 존재
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /v1/geocode/batch:
+    post:
+      summary: 여러 주소 일괄 지오코딩 (geo scope, 최대 50건)
+      operationId: geocodeBatch
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [addresses]
+              properties:
+                addresses:
+                  type: array
+                  items: { type: string }
+                  minItems: 1
+                  maxItems: 50
+            example:
+              addresses: ["서울특별시 중구 세종대로 110", "제주특별자치도 제주시 광양11길 10"]
+      responses:
+        "200":
+          description: 입력 순서대로 항목별 결과. 항목 실패는 error에 담고 배치는 성공(200).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  count: { type: integer }
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        q: { type: string }
+                        match: { type: string }
+                        result: { $ref: "#/components/schemas/GeocodeResult" }
+                        candidates: { type: array, items: { type: string } }
+                        error: { type: string }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /v1/reverse:
+    get:
+      summary: 좌표 → 최근접 건물 주소 (geo scope)
+      operationId: reverse
+      parameters:
+        - name: lon
+          in: query
+          required: true
+          schema: { type: number, format: double }
+        - name: lat
+          in: query
+          required: true
+          schema: { type: number, format: double }
+      responses:
+        "200":
+          description: 반경 200m 내 최근접 건물
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ReverseResult" }
+              example:
+                road_address: "경기도 하남시 신장로 12"
+                bcode: "4145010100"
+                address_name: "경기도 하남시 신장동"
+                distance_m: 14.2
+                point: [127.2071, 37.5401]
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /v1/places/search:
+    get:
+      summary: 상호명 키워드 검색 (geo scope)
+      operationId: placesSearch
+      description: |
+        q(2자 이상)를 주면 키워드 검색. q 없이 lat/lon만 주면 반경 내
+        근접순 목록(주변 상가 브라우즈 모드, similarity=0)을 돌려준다.
+        q와 lat/lon 둘 다 없으면 400.
+      parameters:
+        - name: q
+          in: query
+          required: false
+          description: 검색어 (최소 2자). 생략 시 lat/lon 필수(근접 브라우즈)
+          schema: { type: string, minLength: 2 }
+        - name: category
+          in: query
+          required: false
+          description: category_code 정확일치 필터 (비면 전체)
+          schema: { type: string }
+        - name: lon
+          in: query
+          required: false
+          description: 반경 필터 중심 경도 (lat와 함께 있어야 활성)
+          schema: { type: number, format: double }
+        - name: lat
+          in: query
+          required: false
+          description: 반경 필터 중심 위도 (lon와 함께 있어야 활성)
+          schema: { type: number, format: double }
+        - name: radius
+          in: query
+          required: false
+          description: 반경(m). lon/lat 있을 때만 적용, 기본 1000, 1..20000로 클램프
+          schema: { type: integer, default: 1000, minimum: 1, maximum: 20000 }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer }
+      responses:
+        "200":
+          description: 동일 → 접두 → 포함 계층 순 (계층 내 이름 길이 오름차순) 상호 목록
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  count: { type: integer }
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/Place" }
+              example:
+                count: 1
+                items:
+                  - name: "행복약국"
+                    category_code: "Q05A01"
+                    road_address: "서울특별시 중구 세종대로 110"
+                    point: [126.9784, 37.5665]
+                    similarity: 0.75
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /v1/parcel/by-point:
+    get:
+      summary: 좌표 → 필지 (geo scope)
+      operationId: parcelByPoint
+      parameters:
+        - name: lon
+          in: query
+          required: true
+          schema: { type: number, format: double }
+        - name: lat
+          in: query
+          required: true
+          schema: { type: number, format: double }
+        - name: geometry
+          in: query
+          required: false
+          description: "true면 GeoJSON geometry 포함"
+          schema: { type: string, enum: ["true"] }
+      responses:
+        "200":
+          description: 해당 좌표를 포함하는 필지
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Parcel" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /v1/parcel/by-jibun:
+    get:
+      summary: 지번 → 필지 (geo scope)
+      operationId: parcelByJibun
+      parameters:
+        - name: bcode
+          in: query
+          required: true
+          description: 법정동코드 10자리
+          schema: { type: string, minLength: 10, maxLength: 10 }
+        - name: jibun
+          in: query
+          required: true
+          schema: { type: string }
+        - name: san
+          in: query
+          required: false
+          description: "true면 산 지번"
+          schema: { type: string, enum: ["true"] }
+        - name: geometry
+          in: query
+          required: false
+          schema: { type: string, enum: ["true"] }
+      responses:
+        "200":
+          description: 필지
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Parcel" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /v1/parcel/{pnu}:
+    get:
+      summary: PNU → 필지 (geo scope)
+      operationId: parcelByPNU
+      parameters:
+        - name: pnu
+          in: path
+          required: true
+          description: 필지고유번호 19자리
+          schema: { type: string, minLength: 19, maxLength: 19 }
+        - name: geometry
+          in: query
+          required: false
+          schema: { type: string, enum: ["true"] }
+      responses:
+        "200":
+          description: 필지
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Parcel" }
+              example:
+                pnu: "4145010100100010000"
+                bcode: "4145010100"
+                jibun: "1-1"
+                land_category: "대"
+                source_version: "2026-07-07"
+                centroid: [127.2065, 37.5392]
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /v1/appraisal/sales:
+    get:
+      summary: 토지매매 실거래 사실조회 (realestate scope)
+      operationId: appraisalSales
+      description: |
+        MOLIT RTMSDataSvcLandTrade 원자료를 그대로 반환한다(사실 반환).
+        보정/평가/추천 파생값 없음.
+      parameters:
+        - name: lawd_cd
+          in: query
+          required: true
+          description: 법정동 시군구 코드 5자리
+          schema: { type: string, minLength: 5, maxLength: 5 }
+        - name: deal_ymd
+          in: query
+          required: true
+          description: 계약연월 YYYYMM
+          schema: { type: string, minLength: 6, maxLength: 6 }
+      responses:
+        "200":
+          description: 실거래 목록
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  source: { type: string }
+                  lawd_cd: { type: string }
+                  deal_ymd: { type: string }
+                  total_count: { type: integer }
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/LandTradeItem" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "502": { $ref: "#/components/responses/BadGateway" }
+        "503":
+          description: MOLIT_API_KEY 미설정 — 실거래 조회 비활성
+          content:
+            application/json:
+              example:
+                error: { code: SALES_DISABLED, message: "MOLIT_API_KEY 미설정 — 실거래 조회 비활성 (운영자가 키 투입 후 재시작 필요)" }
+
+  /v1/appraisal/price-index:
+    get:
+      summary: 지가변동률 사실조회 (realestate scope)
+      operationId: appraisalPriceIndex
+      description: R-ONE 용도지역별 월간 지가변동률 원자료 반환. cumulative=true이면 조회 구간의 누적률과 산식을 함께 반환.
+      parameters:
+        - name: sigungu
+          in: query
+          required: true
+          description: 시군구 코드 5자리
+          schema: { type: string, pattern: "^[0-9]{5}$" }
+        - name: use_zone_class
+          in: query
+          required: true
+          description: 원자료 용도지역 분류
+          schema: { type: string, minLength: 1 }
+        - name: from
+          in: query
+          required: false
+          description: 시작연월 YYYYMM
+          schema: { type: string, pattern: "^[0-9]{6}$" }
+        - name: to
+          in: query
+          required: false
+          description: 종료연월 YYYYMM
+          schema: { type: string, pattern: "^[0-9]{6}$" }
+        - name: cumulative
+          in: query
+          required: false
+          description: "true면 조회 구간 누적률 계산"
+          schema: { type: boolean, default: false }
+      responses:
+        "200":
+          description: 지가변동률 원자료
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  source: { type: string }
+                  sigungu_code: { type: string }
+                  use_zone_class: { type: string }
+                  count: { type: integer }
+                  series:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        month: { type: string }
+                        rate_pct: { type: number }
+                  cumulative_pct: { type: number }
+                  cumulative_formula: { type: string }
+                  period:
+                    type: object
+                    properties:
+                      from: { type: string }
+                      to: { type: string }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "502": { $ref: "#/components/responses/BadGateway" }
+
+  /v1/appraisal/standard-lots:
+    get:
+      summary: 표준지공시지가 거리순 조회 (realestate scope)
+      operationId: appraisalStandardLots
+      description: PNU 또는 좌표(lat+lng)를 앵커로 반경 내 표준지를 거리순 반환. use_zone/land_category/land_use 원값 필터.
+      parameters:
+        - { name: pnu, in: query, required: false, description: "19자리 PNU. 없으면 lat+lng 필수", schema: { type: string, minLength: 19, maxLength: 19 } }
+        - { name: lng, in: query, required: false, description: "PNU가 없을 때 필수", schema: { type: number, format: double } }
+        - { name: lat, in: query, required: false, description: "PNU가 없을 때 필수", schema: { type: number, format: double } }
+        - { name: radius, in: query, required: false, description: "반경(m), 기본 2000, 1..10000", schema: { type: integer, default: 2000 } }
+        - { name: base_year, in: query, required: false, schema: { type: integer } }
+        - { name: use_zone, in: query, required: false, schema: { type: string } }
+        - { name: land_category, in: query, required: false, schema: { type: string } }
+        - { name: land_use, in: query, required: false, schema: { type: string } }
+        - { name: limit, in: query, required: false, schema: { type: integer } }
+      responses:
+        "200":
+          description: 거리순 표준지 목록
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  source: { type: string }
+                  anchor:
+                    type: object
+                    properties:
+                      lat: { type: number }
+                      lng: { type: number }
+                  radius_m: { type: integer }
+                  count: { type: integer }
+                  standard_lots: { type: array, items: { type: object } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /v1/appraisal/official-price:
+    get:
+      summary: 공시지가 조회 — 표준지 우선, 없으면 개별 (realestate scope)
+      operationId: appraisalOfficialPrice
+      description: |
+        PNU의 공시지가 반환. 표준지공시지가가 있으면 price_type=STANDARD, 없고 개별공시지가가
+        있으면 INDIVIDUAL. 둘 다 없고 개별공시지가 미적재 시군구이면 422 REGION_NOT_LOADED.
+      parameters:
+        - { name: pnu, in: query, required: true, schema: { type: string, minLength: 19, maxLength: 19 } }
+        - { name: base_year, in: query, required: false, schema: { type: integer } }
+      responses:
+        "200":
+          description: 공시지가
+          content:
+            application/json:
+              schema: { type: object, properties: { pnu: { type: string }, base_year: { type: integer }, price_per_sqm: { type: integer, format: int64 }, price_type: { type: string, enum: [INDIVIDUAL, STANDARD] } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { description: "개별공시지가 미적재 지역 (REGION_NOT_LOADED)" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /v1/appraisal/land-use:
+    get:
+      summary: 토지이용계획(용도지역·지구·구역) 조회 (realestate scope)
+      operationId: appraisalLandUse
+      description: PNU의 용도지역/지구/구역 + 원자료 사전판정 관계(포함/저촉/접함) 반환. 저촉 면적비는 원자료 미제공.
+      parameters:
+        - { name: pnu, in: query, required: true, schema: { type: string, minLength: 19, maxLength: 19 } }
+      responses:
+        "200":
+          description: 용도지역/지구/구역 목록
+          content:
+            application/json:
+              schema: { type: object, properties: { pnu: { type: string }, count: { type: integer }, zones: { type: array, items: { type: object, properties: { zone_code: { type: string }, zone_name: { type: string }, relation: { type: string } } } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { description: "토지이용계획 미적재 지역 (REGION_NOT_LOADED)" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /v1/appraisal/land-features:
+    get:
+      summary: 토지특성(이용상황·지형·도로접면) 조회 (realestate scope)
+      operationId: appraisalLandFeatures
+      description: PNU의 토지특성(토지이용상황·지형높이·지형형상·도로접면)을 원값 라벨 그대로 반환(재분류 없음). 미적재 시 422.
+      parameters:
+        - { name: pnu, in: query, required: true, schema: { type: string, minLength: 19, maxLength: 19 } }
+        - { name: base_year, in: query, required: false, schema: { type: integer } }
+      responses:
+        "200":
+          description: 토지특성 (원값 라벨)
+          content:
+            application/json:
+              schema: { type: object, properties: { pnu: { type: string }, base_year: { type: integer }, land_use: { type: string }, terrain_height: { type: string }, terrain_shape: { type: string }, road_side: { type: string }, source_version: { type: string } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { description: "토지특성 미적재 지역 (REGION_NOT_LOADED)" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+    BearerAuth:
+      type: http
+      scheme: bearer
+
+  responses:
+    BadRequest:
+      description: 잘못된 요청 (파라미터 검증 실패)
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/HandlerError" }
+    NotFound:
+      description: 대상 없음
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/HandlerError" }
+    BadGateway:
+      description: 업스트림(정부 API) 오류
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/HandlerError" }
+    Unauthorized:
+      description: API 키 누락 또는 무효
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example: { error: { code: unauthorized, message: "API key required" } }
+    Forbidden:
+      description: scope 부족
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example: { error: { code: forbidden, message: "API key missing required scope" } }
+    RateLimited:
+      description: >
+        rate limit 초과(code: rate_limited, Retry-After 헤더 포함) 또는
+        월 호출 하드캡 도달(code: monthly_cap_exceeded, 다음 달 UTC에 리셋).
+      headers:
+        Retry-After:
+          description: 재시도까지 대기 초 (rate_limited일 때만)
+          schema: { type: integer }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example: { error: { code: rate_limited, message: "rate limit exceeded" } }
+
+  schemas:
+    Error:
+      type: object
+      description: 미들웨어(인증/rate limit) 통일 에러 포맷
+      properties:
+        error:
+          type: object
+          properties:
+            code: { type: string }
+            message: { type: string }
+          required: [code, message]
+      required: [error]
+    HandlerError:
+      type: object
+      description: 핸들러 계층 에러 (현행 {"error":"<message>"} 형태)
+      properties:
+        error: { type: string }
+      required: [error]
+    LonLat:
+      type: array
+      description: "[경도, 위도]"
+      items: { type: number, format: double }
+      minItems: 2
+      maxItems: 2
+    GeocodeResult:
+      type: object
+      properties:
+        road_address: { type: string }
+        jibun_address: { type: string }
+        bcode: { type: string }
+        point: { $ref: "#/components/schemas/LonLat" }
+        match:
+          type: string
+          enum: [exact, exact_partial, jibun, trigram, ambiguous]
+        score: { type: number, format: double }
+        candidates:
+          type: array
+          items: { type: string }
+        warnings:
+          type: array
+          items: { type: string }
+      required: [point, match]
+    ReverseResult:
+      type: object
+      properties:
+        road_address: { type: string }
+        bcode: { type: string }
+        address_name: { type: string }
+        distance_m: { type: number, format: double }
+        point: { $ref: "#/components/schemas/LonLat" }
+      required: [road_address, bcode, distance_m, point]
+    Place:
+      type: object
+      properties:
+        name: { type: string }
+        category_code: { type: string }
+        road_address: { type: string }
+        jibun_address: { type: string }
+        point: { $ref: "#/components/schemas/LonLat" }
+        similarity: { type: number, format: double }
+      required: [name, point, similarity]
+    Parcel:
+      type: object
+      properties:
+        pnu: { type: string }
+        bcode: { type: string }
+        address_name: { type: string }
+        jibun: { type: string }
+        land_category: { type: string }
+        source_version: { type: string }
+        centroid: { $ref: "#/components/schemas/LonLat" }
+        geometry:
+          description: GeoJSON geometry (geometry=true일 때만)
+          type: object
+      required: [pnu, bcode, jibun, source_version, centroid]
+    LandTradeItem:
+      type: object
+      properties:
+        deal_year: { type: string }
+        deal_month: { type: string }
+        deal_day: { type: string }
+        deal_amount_manwon: { type: string }
+        deal_area_m2: { type: string }
+        jimok: { type: string }
+        land_use: { type: string }
+        sgg_cd: { type: string }
+        sgg_nm: { type: string }
+        umd_nm: { type: string }
+        jibun_masked: { type: string }
+        dealing_gbn: { type: string }
+        share_dealing_type: { type: string }
