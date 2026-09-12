@@ -139,6 +139,8 @@ The implementation is a focused tools adapter supporting `initialize`, `ping`, `
 
 More context, including rejected alternatives, is in [engineering decisions](docs/engineering-decisions.md). A sanitized real debugging example is in [failure analysis](docs/failure-analysis.md).
 
+A [proposed temporal-data publication architecture](docs/design/temporal-data-publication.md) explores historical queries, source-driven ETL scheduling, immutable releases, blue-green/canary data publication, and caching with rate limiting. It is explicitly a **design proposal**, not a claim that those future capabilities are implemented.
+
 ## Data pipeline and provenance
 
 `b2d-etl` provides implemented paths for road-address buildings, places, entrance points, cadastral parcels, land transactions, land-price indices, standard lots, parcel zoning, individual official prices, and land features. Migrations are embedded in the binary and applied transactionally.
@@ -188,6 +190,7 @@ openapi.yaml      OpenAPI 3.1 contract
 
 - Raw and licensed datasets are not distributed, so a clone starts with an empty database.
 - Snapshot counts are dated operational records rather than CI-recomputed or live-count guarantees.
+- Historical date/release selection is a [design proposal](docs/design/temporal-data-publication.md), not a currently supported API contract or a guarantee of nationwide historical coverage.
 - Individual official prices and land features were loaded Seoul/Gyeonggi-first; an unloaded region returns `REGION_NOT_LOADED` rather than a guessed value.
 - Usage metering favors availability and latency over lossless billing semantics.
 - DB-backed route integration coverage is an area for further work; the included unit suite concentrates on parsing, auth, request IDs, metering, provenance-sensitive loaders, and Sentry scrubbing.
